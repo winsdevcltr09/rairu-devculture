@@ -10,7 +10,7 @@ Notifikasi SSH dan status dikirim ke **ntfy** topic `yans-proton`.
 **1. Tunggu notifikasi di ntfy (`yans-proton`)**  
 Setiap kali VPS online atau bore reconnect, kamu dapat notifikasi dengan port SSH terbaru.
 
-**2. Koneksi SSH (tidak perlu install apapun di client):**
+**2. Koneksi SSH:**
 ```bash
 ssh root@bore.pub -p <PORT_DARI_NTFY>
 # Password: lihat Railway env var ROOT_PASS
@@ -34,29 +34,77 @@ VPS akan restart dalam ~10 detik.
 
 ---
 
+## 💾 Data Persisten (Railway Volume)
+
+> **Tanpa Volume**, semua file yang dibuat via SSH akan **hilang saat redeploy**.  
+> Dengan **Railway Volume** yang di-mount ke `/data`, data kamu **aman**.
+
+### Setup Volume (1x saja)
+
+1. Buka Railway → project `rairu-devculture` → klik service
+2. Klik tab **"Volumes"** → **"Add Volume"**
+3. Isi:
+   - **Mount Path**: `/data`
+   - **Size**: sesuai kebutuhan (default 1GB)
+4. Klik **Create** → Railway akan redeploy otomatis
+
+Setelah itu, `/data` tidak pernah hilang meski redeploy berkali-kali.
+
+### Struktur `/data`
+
+```
+/data/
+├── hermes/          ← simpan config + data hermes di sini
+│   ├── config.yaml  ← contoh config hermes
+│   └── ...
+├── ssh-keys/
+│   └── authorized_keys  ← SSH key kamu (otomatis terhubung ke ~/.ssh/)
+├── supervisor/      ← tambah file .conf supervisord di sini
+└── logs/            ← log persisten (opsional)
+```
+
+### Tips penggunaan `/data`
+
+```bash
+# Simpan config hermes ke volume (tidak hilang saat redeploy)
+nano /data/hermes/config.yaml
+
+# Tambah SSH key agar tidak perlu password lagi
+echo "ssh-ed25519 AAAA..." >> /data/ssh-keys/authorized_keys
+
+# Tambah service supervisord baru (persisten)
+nano /data/supervisor/myservice.conf
+supervisorctl reread && supervisorctl update
+```
+
+---
+
 ## ⚙️ Hermes Gateway Telegram
 
 Hermes dikelola oleh **supervisord** (process manager standar Docker).
 
 ### Setup Awal
 
-**Langkah 1 — Set env var di Railway:**
+**Langkah 1 — Simpan file hermes ke `/data/hermes/`:**
+```bash
+# SSH masuk, lalu taruh binary/config hermes di sini
+cp /path/to/hermes-binary /data/hermes/
+chmod +x /data/hermes/hermes-binary
+
+# Config hermes
+nano /data/hermes/config.yaml
+```
+
+**Langkah 2 — Set env var di Railway:**
 
 Buka Railway → `rairu-devculture` → Variables, tambah:
 
 | Variable | Nilai | Keterangan |
 |----------|-------|------------|
-| `HERMES_CMD` | `/usr/local/bin/hermes --config /etc/hermes/config.yaml` | Ganti dengan command hermes yang benar |
-| `HERMES_AUTOSTART` | `true` | `true` = autostart saat boot, `false` = manual |
+| `HERMES_CMD` | `/data/hermes/hermes-binary --config /data/hermes/config.yaml` | Command hermes (pakai path /data agar tidak hilang) |
+| `HERMES_AUTOSTART` | `true` | `true` = autostart saat boot |
 
-Setelah set env var, Railway akan redeploy otomatis.
-
-**Langkah 2 — Atau edit config langsung di VPS:**
-```bash
-nano /etc/supervisor/conf.d/hermes.conf
-supervisorctl reread
-supervisorctl update
-```
+> **Penting:** Pakai path `/data/hermes/...` agar command tetap valid setelah redeploy.
 
 ### Perintah Supervisorctl
 
@@ -76,21 +124,19 @@ supervisorctl restart hermes-gateway
 # Lihat log hermes secara realtime
 supervisorctl tail -f hermes-gateway
 
-# Reload config setelah edit hermes.conf
+# Reload config setelah edit
 supervisorctl reread && supervisorctl update
 ```
 
 ### Log Hermes
 
 ```bash
-# Log stdout (output normal)
-tail -f /tmp/hermes.log
+# Log realtime
+tail -f /tmp/hermes.log        # stdout
+tail -f /tmp/hermes-error.log  # stderr
 
-# Log stderr (error)
-tail -f /tmp/hermes-error.log
-
-# Log supervisord
-tail -f /tmp/supervisord.log
+# Log persisten (simpan manual ke /data)
+cp /tmp/hermes.log /data/logs/hermes-$(date +%Y%m%d).log
 ```
 
 ### Crash Notification
@@ -111,34 +157,42 @@ Hermes akan di-restart otomatis oleh supervisord (maks 10x percobaan).
 | `ROOT_PASS` | *(wajib diset)* | Password SSH root |
 | `NTFY_TOPIC` | `yans-proton` | Topic ntfy untuk notifikasi |
 | `BORE_SERVER` | `bore.pub` | Server bore tunnel |
-| `HERMES_CMD` | *(kosong)* | Command untuk jalankan hermes-gateway |
+| `HERMES_CMD` | *(kosong)* | Command untuk jalankan hermes (gunakan path `/data/`) |
 | `HERMES_AUTOSTART` | `false` | Auto-start hermes saat boot |
 
 ---
 
-## 📁 Struktur Service
+## 📁 Struktur File
 
 ```
-entrypoint.sh          ← startup script utama
-supervisord.conf        ← config supervisord
-hermes.conf            ← service unit hermes-gateway
-crash-notifier.sh      ← kirim ntfy saat service crash
+# Di dalam container (reset saat redeploy)
+entrypoint.sh           ← startup script utama
+supervisord.conf         ← config supervisord
+hermes.conf             ← service unit hermes-gateway
+crash-notifier.sh       ← kirim ntfy saat service crash
+/tmp/hermes.log          ← log hermes stdout (sementara)
+/tmp/hermes-error.log    ← log hermes stderr (sementara)
 
-/tmp/hermes.log         ← log hermes stdout
-/tmp/hermes-error.log   ← log hermes stderr
-/tmp/supervisord.log    ← log supervisord
-/tmp/bore.log           ← log bore tunnel
+# Persisten di Railway Volume (tidak hilang)
+/data/hermes/            ← binary + config hermes
+/data/ssh-keys/          ← authorized_keys SSH
+/data/supervisor/        ← config supervisord tambahan
+/data/logs/              ← log persisten
 ```
 
 ---
 
 ## 🛠️ Troubleshooting
 
+**Data hilang setelah redeploy?**  
+→ Pastikan Railway Volume sudah dibuat dan di-mount ke `/data`. Cek: `mountpoint -q /data && echo "OK" || echo "TIDAK TERPASANG"`
+
 **Hermes tidak mau start:**
 ```bash
 supervisorctl status hermes-gateway   # cek state
 tail -20 /tmp/hermes-error.log        # cek error
 echo $HERMES_CMD                       # pastikan env var terisi
+ls -la /data/hermes/                   # cek binary ada di /data
 ```
 
 **Port SSH berubah (bore reconnect):**  
@@ -146,6 +200,9 @@ Cek notifikasi ntfy terbaru — port baru dikirim otomatis.
 
 **VPS tidak bisa di-SSH:**  
 Kirim `restart` ke ntfy topic `yans-proton` untuk restart Railway container.
+
+**SSH key tidak dikenali setelah redeploy:**  
+Authorized keys disimpan di `/data/ssh-keys/authorized_keys` — cek volume sudah terpasang.
 
 ---
 

@@ -43,6 +43,10 @@ COPY supervisord.conf /etc/supervisord.conf
 RUN mkdir -p /etc/supervisor/conf.d
 COPY hermes.conf /etc/supervisor/conf.d/hermes.conf
 
+# Crash notifier script — dikirim ke ntfy saat service crash
+COPY crash-notifier.sh /usr/local/bin/crash-notifier.sh
+RUN chmod +x /usr/local/bin/crash-notifier.sh
+
 # SSH login notification
 COPY notify-ssh-login.sh /etc/profile.d/notify-ssh-login.sh
 RUN chmod +x /etc/profile.d/notify-ssh-login.sh

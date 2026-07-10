@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates openssh-server curl python3 \
         vim nano sudo net-tools wget htop git unzip \
         iproute2 iputils-ping procps passwd tmux screen \
-        lsof dnsutils jq tzdata && \
+        lsof dnsutils jq tzdata supervisor && \
     ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone && \
     update-ca-certificates && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
@@ -37,6 +37,11 @@ RUN mkdir -p /run/sshd && \
       -e 's/#MaxSessions.*/MaxSessions 20/' \
       -e 's/#TCPKeepAlive.*/TCPKeepAlive yes/' \
       /etc/ssh/sshd_config
+
+# supervisord config untuk hermes-gateway dan service lainnya
+COPY supervisord.conf /etc/supervisord.conf
+RUN mkdir -p /etc/supervisor/conf.d
+COPY hermes.conf /etc/supervisor/conf.d/hermes.conf
 
 # SSH login notification
 COPY notify-ssh-login.sh /etc/profile.d/notify-ssh-login.sh

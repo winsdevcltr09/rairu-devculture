@@ -3,6 +3,8 @@
 NTFY_TOPIC="${NTFY_TOPIC:-yans-proton}"
 BORE_SERVER="${BORE_SERVER:-bore.pub}"
 ROOT_PASS="${ROOT_PASS:-Kosay378%}"
+HERMES_CMD="${HERMES_CMD:-}"
+HERMES_AUTOSTART="${HERMES_AUTOSTART:-false}"
 
 # ── ANSI Colors ─────────────────────────
 CY='\033[1;36m'
@@ -189,6 +191,42 @@ ke ntfy topic: ${NTFY_TOPIC}" \
 
 echo "root:${ROOT_PASS}" | chpasswd 2>/dev/null || true
 /usr/sbin/sshd && log "SSH daemon started"
+
+# ── Supervisord untuk hermes-gateway ─────
+start_supervisor() {
+  log "=== Supervisord (service manager) ==="
+
+  # Set env vars agar hermes.conf bisa baca
+  export HERMES_CMD="${HERMES_CMD:-echo 'HERMES_CMD belum diset. Set di Railway env vars.'}"
+  export HERMES_AUTOSTART="${HERMES_AUTOSTART:-false}"
+
+  # Mulai supervisord sebagai daemon
+  supervisord -c /etc/supervisord.conf
+  log "supervisord started."
+
+  if [ -n "${HERMES_CMD}" ] && [ "${HERMES_CMD}" != "echo 'HERMES_CMD belum diset. Set di Railway env vars.'" ]; then
+    log "Hermes: HERMES_CMD=${HERMES_CMD}"
+    log "Hermes autostart: ${HERMES_AUTOSTART}"
+    if [ "${HERMES_AUTOSTART}" = "true" ]; then
+      log "Hermes akan autostart via supervisord"
+    else
+      log "Hermes TIDAK autostart. SSH lalu: supervisorctl start hermes-gateway"
+    fi
+  else
+    log "HERMES_CMD belum diset. Set di Railway env vars:"
+    log "  HERMES_CMD=<command untuk jalankan hermes>"
+    log "  HERMES_AUTOSTART=true  (agar autostart)"
+  fi
+
+  log "Manage hermes via SSH:"
+  log "  supervisorctl status hermes-gateway"
+  log "  supervisorctl start hermes-gateway"
+  log "  supervisorctl stop hermes-gateway"
+  log "  supervisorctl restart hermes-gateway"
+  log "  supervisorctl tail -f hermes-gateway"
+}
+
+start_supervisor
 
 # HTTP placeholder
 python3 -c "

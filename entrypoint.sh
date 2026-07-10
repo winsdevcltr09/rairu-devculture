@@ -43,7 +43,6 @@ notify() {
 }
 
 # ── Notify dengan tombol Restart ─────────
-# Klik tombol → kirim pesan "restart" ke topik → VPS restart otomatis
 notify_ssh() {
   local title="$1" body="$2" priority="${3:-high}" tags="${4:-tada,key,computer}"
   curl -s --max-time 10 --retry 2 \
@@ -57,7 +56,6 @@ notify_ssh() {
 }
 
 # ── Watch Restart Command ─────────────────
-# Poll ntfy setiap 10 detik, jika ada pesan "restart" → container exit → Railway restart
 watch_restart() {
   log "=== Restart Watcher aktif (ketik 'restart' di ntfy) ==="
   local last_seen
@@ -83,7 +81,6 @@ Container akan restart dalam 3 detik...
 c2026 devculture linux" \
       "urgent" "arrows_counterclockwise,warning"
       sleep 3
-      # Exit dengan kode 1 agar Railway restart otomatis (policy: ON_FAILURE)
       kill -TERM 1 2>/dev/null || exit 1
     fi
   done
@@ -113,7 +110,6 @@ start_bore() {
       log "Bore aktif! Port: $port (reconnect #${reconnect_count})"
 
       if [ "$reconnect_count" -eq 0 ]; then
-        # Boot pertama — notif lengkap dengan tombol Restart
         notify_ssh "VPS ONLINE - Devops" \
 "▓▓▓ DEVOPS VPS ONLINE ▓▓▓
 c2026 devculture linux
@@ -127,7 +123,6 @@ Klik [Restart VPS] untuk restart cepat!
 Atau kirim pesan: restart" \
         "high" "tada,key,computer"
       else
-        # Reconnect — notif singkat dengan port baru + tombol Restart
         notify_ssh "Bore Reconnected - Port Baru!" \
 "Bore tunnel reconnected!
 
@@ -173,6 +168,83 @@ Klik [Restart VPS] atau kirim: restart" \
   done
 }
 
+# ── Setup /data (Railway Volume) ──────────
+# Semua data persisten disimpan di /data — tidak hilang saat redeploy
+setup_persistent_storage() {
+  log "=== Setup /data (Railway Volume) ==="
+
+  # Cek apakah /data di-mount sebagai volume
+  if mountpoint -q /data 2>/dev/null; then
+    log "/data: Railway Volume terpasang ✓"
+  else
+    log "/data: Volume TIDAK terpasang — pakai storage sementara"
+    log "  Untuk data persisten: buat Volume di Railway dan mount ke /data"
+    mkdir -p /data
+  fi
+
+  # ── Struktur direktori di /data ──
+  mkdir -p /data/hermes          # config + data hermes
+  mkdir -p /data/ssh-keys        # SSH authorized_keys persisten
+  mkdir -p /data/supervisor      # config supervisord tambahan
+  mkdir -p /data/logs            # log persisten (opsional)
+
+  # ── SSH authorized_keys: simpan ke /data agar tidak hilang ──
+  mkdir -p /root/.ssh
+  chmod 700 /root/.ssh
+  # Buat file jika belum ada di /data
+  touch /data/ssh-keys/authorized_keys
+  chmod 600 /data/ssh-keys/authorized_keys
+  # Symlink /root/.ssh/authorized_keys → /data/ssh-keys/authorized_keys
+  if [ ! -L /root/.ssh/authorized_keys ]; then
+    rm -f /root/.ssh/authorized_keys
+    ln -sf /data/ssh-keys/authorized_keys /root/.ssh/authorized_keys
+    log "SSH authorized_keys → /data/ssh-keys/authorized_keys (persisten)"
+  fi
+
+  # ── Hermes config: jika ada di /data, pakai itu ──
+  if [ -d /data/hermes ] && [ "$(ls -A /data/hermes 2>/dev/null)" ]; then
+    log "Hermes data ditemukan di /data/hermes"
+  else
+    log "Hermes data: /data/hermes kosong — siap diisi"
+  fi
+
+  # ── Extra supervisor conf dari /data ──
+  # Kamu bisa taruh file .conf di /data/supervisor/ via SSH, tidak hilang saat redeploy
+  if [ -d /data/supervisor ] && [ "$(ls -A /data/supervisor/*.conf 2>/dev/null)" ]; then
+    log "Extra supervisor conf dari /data/supervisor/ ditemukan"
+    cp /data/supervisor/*.conf /etc/supervisor/conf.d/ 2>/dev/null || true
+  fi
+
+  log "/data siap:"
+  log "  /data/hermes/        ← simpan config/data hermes di sini"
+  log "  /data/ssh-keys/      ← authorized_keys SSH (sudah terhubung)"
+  log "  /data/supervisor/    ← config supervisord tambahan"
+  log "  /data/logs/          ← log persisten (opsional)"
+}
+
+# ── Supervisord untuk hermes-gateway ─────
+start_supervisor() {
+  log "=== Supervisord (service manager) ==="
+
+  export HERMES_CMD="${HERMES_CMD:-echo 'HERMES_CMD belum diset'}"
+  export HERMES_AUTOSTART="${HERMES_AUTOSTART:-false}"
+
+  supervisord -c /etc/supervisord.conf
+  log "supervisord started."
+
+  if [ -n "${HERMES_CMD}" ] && [ "${HERMES_CMD}" != "echo 'HERMES_CMD belum diset'" ]; then
+    log "Hermes: HERMES_CMD=${HERMES_CMD}"
+    log "Hermes autostart: ${HERMES_AUTOSTART}"
+    if [ "${HERMES_AUTOSTART}" = "true" ]; then
+      log "Hermes akan autostart via supervisord"
+    else
+      log "Hermes TIDAK autostart. SSH lalu: supervisorctl start hermes-gateway"
+    fi
+  else
+    log "HERMES_CMD belum diset di Railway env vars"
+  fi
+}
+
 # ── Boot ──────────────────────────────────
 print_banner
 log "ntfy topic : $NTFY_TOPIC"
@@ -192,39 +264,8 @@ ke ntfy topic: ${NTFY_TOPIC}" \
 echo "root:${ROOT_PASS}" | chpasswd 2>/dev/null || true
 /usr/sbin/sshd && log "SSH daemon started"
 
-# ── Supervisord untuk hermes-gateway ─────
-start_supervisor() {
-  log "=== Supervisord (service manager) ==="
-
-  # Set env vars agar hermes.conf bisa baca
-  export HERMES_CMD="${HERMES_CMD:-echo 'HERMES_CMD belum diset. Set di Railway env vars.'}"
-  export HERMES_AUTOSTART="${HERMES_AUTOSTART:-false}"
-
-  # Mulai supervisord sebagai daemon
-  supervisord -c /etc/supervisord.conf
-  log "supervisord started."
-
-  if [ -n "${HERMES_CMD}" ] && [ "${HERMES_CMD}" != "echo 'HERMES_CMD belum diset. Set di Railway env vars.'" ]; then
-    log "Hermes: HERMES_CMD=${HERMES_CMD}"
-    log "Hermes autostart: ${HERMES_AUTOSTART}"
-    if [ "${HERMES_AUTOSTART}" = "true" ]; then
-      log "Hermes akan autostart via supervisord"
-    else
-      log "Hermes TIDAK autostart. SSH lalu: supervisorctl start hermes-gateway"
-    fi
-  else
-    log "HERMES_CMD belum diset. Set di Railway env vars:"
-    log "  HERMES_CMD=<command untuk jalankan hermes>"
-    log "  HERMES_AUTOSTART=true  (agar autostart)"
-  fi
-
-  log "Manage hermes via SSH:"
-  log "  supervisorctl status hermes-gateway"
-  log "  supervisorctl start hermes-gateway"
-  log "  supervisorctl stop hermes-gateway"
-  log "  supervisorctl restart hermes-gateway"
-  log "  supervisorctl tail -f hermes-gateway"
-}
+# Setup /data persisten SEBELUM supervisor
+setup_persistent_storage
 
 start_supervisor
 
